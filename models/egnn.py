@@ -37,7 +37,6 @@ class EGNNLayer(torch.nn.Module):
         self.in_features = in_features
         self.hidden_features = hidden_features
         self.out_features = out_features
-        self.hidden_features = hidden_features
         self.activation = activation
         self.space_dimension = space_dimension
 
@@ -71,7 +70,9 @@ class EGNNLayer(torch.nn.Module):
                     [
                         edge.src["h_v"],
                         edge.dst["h_v"],
-                        (edge.src["x"] - edge.dst["x"]).pow(2).sum(dim=-1, keepdims=True),
+                        (edge.src["x"] - edge.dst["x"]).pow(2).sum(
+                            dim=-1, keepdims=True
+                        ),
                     ],
                     dim=-1
                 )
@@ -181,3 +182,50 @@ class EGNN(torch.nn.Module):
         activation=torch.nn.SiLU(),
     ):
         super(EGNN, self).__init__()
+        self.in_features = in_features
+        self.hidden_features = hidden_features
+        self.out_features = out_features
+        self.embedding_in = torch.nn.Linear(in_features, hidden_features)
+        self.embedding_out = torch.nn.Linear(hidden_features, out_features)
+        self.activation = activation
+        self.depth = depth
+
+        for idx in range(0, depth):
+            self.add_module(
+                "EGNNLayer_%s" % idx, EGNNLayer(
+                    in_features=hidden_features,
+                    hidden_features=hidden_features,
+                    out_features=hidden_features,
+                    activation=activation,
+                )
+            )
+
+    def forward(self, graph, feat, coordinate):
+        """ Forward pass.
+
+        Parameters
+        ----------
+        graph : dgl.DGLGraph
+            Input graph.
+
+        feat : torch.Tensor
+            Input features.
+
+        coordinate : torch.Tensor
+            Input coordinates.
+
+        Returns
+        -------
+        torch.Tensor : Output features.
+
+        torch.Tensor : Output coordinates.
+
+        """
+        graph = graph.local_var()
+        feat = self.embedding_in(feat)
+        for idx in range(self.depth):
+            feat, coordinate = self._modules["EGNNLayer_%s" % idx](
+                graph, feat, coordinate
+            )
+        feat = self.embedding_out(feat)
+        return feat, coordinate
