@@ -29,8 +29,8 @@ class EGNNLayer(torch.nn.Module):
         in_features : int,
         hidden_features: int,
         out_features : int,
-        edge_features : int=0,
         activation : Callable=torch.nn.SiLU(),
+        space_dimension : int=3,
     ):
         super(EGNNLayer, self).__init__()
 
@@ -38,8 +38,8 @@ class EGNNLayer(torch.nn.Module):
         self.hidden_features = hidden_features
         self.out_features = out_features
         self.hidden_features = hidden_features
-        self.edge_features = edge_features
         self.activation = activation
+        self.space_dimension = space_dimension
 
         self.coordinate_mlp = torch.nn.Sequential(
             torch.nn.Linear(hidden_features, hidden_features),
@@ -49,7 +49,7 @@ class EGNNLayer(torch.nn.Module):
 
         self.edge_mlp = torch.nn.Sequential(
             torch.nn.Linear(
-                in_features * 2 + 1 + edge_features,
+                in_features * 2 + 1,
                 hidden_features
             ),
             activation,
@@ -64,13 +64,14 @@ class EGNNLayer(torch.nn.Module):
         )
 
     def _edge_model(self, edge):
+
         return {"h_e":
             self.edge_mlp(
                 torch.cat(
                     [
                         edge.src["h_v"],
                         edge.dst["h_v"],
-                        (edge.src["x"] - edge.dst["x"]) ** 2,
+                        (edge.src["x"] - edge.dst["x"]).pow(2).sum(dim=-1, keepdims=True),
                     ],
                     dim=-1
                 )
@@ -84,7 +85,8 @@ class EGNNLayer(torch.nn.Module):
                     [
                         node.data["h_v"],
                         node.data["h_agg"],
-                    ]
+                    ],
+                    dim=-1,
                 )
             )
         }
@@ -97,7 +99,7 @@ class EGNNLayer(torch.nn.Module):
 
     def _coordinate_node_model(self, node):
         return {
-            "x": node["x"] + node.data["x_v_agg"],
+            "x": node.data["x"] + node.data["x_agg"],
         }
 
     def forward(self, graph, feat, coordinate):
@@ -136,18 +138,24 @@ class EGNNLayer(torch.nn.Module):
         # aggregate coordinate update
         graph.update_all(
             dgl.function.copy_e("x_e", "x_msg"),
-            dgl.function.sum("x_msg", "x_v_agg"),
+            dgl.function.sum("x_msg", "x_agg"),
         )
 
         # apply coordinate update on nodes
         graph.apply_nodes(func=self._coordinate_node_model)
 
+        ## aggregate representation update
+        graph.update_all(
+            dgl.function.copy_e("h_e", "h_msg"),
+            dgl.function.sum("h_msg", "h_agg"),
+        )
+
         # apply representation update on nodes
         graph.apply_nodes(func=self._node_model)
 
         # pull features
-        feat = graph.ndata["x"]
-        coordinate = graph.ndata["h_v"]
+        feat = graph.ndata["h_v"]
+        coordinate = graph.ndata["x"]
 
         return feat, coordinate
 
