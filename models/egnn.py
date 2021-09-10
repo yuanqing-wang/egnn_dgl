@@ -62,6 +62,12 @@ class EGNNLayer(torch.nn.Module):
             torch.nn.Linear(hidden_features, out_features)
         )
 
+        self.velocity_nlp = torch.nn.Sequential(
+            torch.nn.Linear(in_features, hidden_features),
+            activation,
+            torch.nn.Linear(hidden_features, 1),
+        )
+
     def _edge_model(self, edge):
 
         return {"h_e":
@@ -103,7 +109,16 @@ class EGNNLayer(torch.nn.Module):
             "x": node.data["x"] + node.data["x_agg"],
         }
 
-    def forward(self, graph, feat, coordinate):
+    def _velocity_and_coordinate_node_model(self, node):
+        v = self.velocity_nlp(node.data["h_v"]) * node.data["v"]\
+            + node.data["x_agg"]
+
+        return {
+            "x": node.data["x"] + v,
+            "v": v
+        }
+
+    def forward(self, graph, feat, coordinate, velocity=None):
         """ Forward pass.
 
         Parameters
@@ -116,6 +131,9 @@ class EGNNLayer(torch.nn.Module):
 
         coordinate : torch.Tensor
             Input coordinates.
+
+        velocity : torch.Tensor
+            Input velocity.
 
         Returns
         -------
@@ -143,7 +161,11 @@ class EGNNLayer(torch.nn.Module):
         )
 
         # apply coordinate update on nodes
-        graph.apply_nodes(func=self._coordinate_node_model)
+        if velocity is not None:
+            graph.ndata["v"] = velocity
+            graph.apply_nodes(func=self._velocity_and_coordinate_node_model)
+        else:
+            graph.apply_nodes(func=self._coordinate_node_model)
 
         ## aggregate representation update
         graph.update_all(
